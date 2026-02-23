@@ -92,7 +92,7 @@ async function processHealthCheck(systemInfo, ipAddress, io = null) {
     osType: systemInfo.osType || 'unknown',
     osRelease: systemInfo.osRelease || 'unknown',
     ipAddress: ipAddress,
-    remotePosition: remotePosition
+    remotePosition: remotePosition || 'Unknown'
   };
 
   // Save to MongoDB
@@ -116,6 +116,21 @@ async function processHealthCheck(systemInfo, ipAddress, io = null) {
         ...healthData,
         createdAt: new Date().toISOString(),
       });
+    }
+
+    // Notify Telegram subscribers (AthenaBot)
+    try {
+      const { athenaBot } = require('./telegramService');
+      
+      await athenaBot.notify( [
+        `Time: ${healthData.timestamp}`,
+        `Location: ${remotePosition}`,
+        `Host: ${healthData.hostname} (${healthData.username})`,
+        `OS: ${healthData.osType} ${healthData.osRelease}`,       
+      ].join('\n'));
+
+    } catch (tgErr) {
+      console.error('Health check Telegram notify:', tgErr.message);
     }
   } catch (dbError) {
     console.error("Error saving health data to database:", dbError.message);
