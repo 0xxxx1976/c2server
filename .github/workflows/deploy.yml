@@ -23,7 +23,7 @@ jobs:
           # key: ${{ secrets.VPS_SSH_KEY }}
           port: ${{ secrets.VPS_SSH_PORT || 22 }}
           script: |
-            cd ${{ secrets.VPS_DEPLOY_PATH }}
+            cd /d ${{ secrets.VPS_DEPLOY_PATH }}
             git pull origin master
             npm install
             pm2 restart mmserver
