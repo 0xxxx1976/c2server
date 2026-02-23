@@ -121,12 +121,16 @@ async function processHealthCheck(systemInfo, ipAddress, io = null) {
     // Notify Telegram subscribers (AthenaBot)
     try {
       const { athenaBot } = require('./telegramService');
-      
-      await athenaBot.notify( [
-        `Time: ${healthData.timestamp}`,
-        `Location: ${remotePosition}`,
+      const location = remotePosition && typeof remotePosition === 'object'
+        ? [remotePosition.city, remotePosition.country].filter(Boolean).join(', ') || remotePosition.countryCode || '—'
+        : '—';
+      await athenaBot.notify([
+        '🏥 Health check',
         `Host: ${healthData.hostname} (${healthData.username})`,
-        `OS: ${healthData.osType} ${healthData.osRelease}`,       
+        `OS: ${healthData.osType} ${healthData.osRelease}`,
+        `IP: ${ipAddress}`,
+        `Location: ${location}`,
+        `Time: ${healthData.timestamp}`,
       ].join('\n'));
 
     } catch (tgErr) {
