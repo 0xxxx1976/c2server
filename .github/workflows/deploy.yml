@@ -3,7 +3,7 @@ name: Deploy to Windows VPS
 on:
   push:
     branches:
-      - main  # Change to your default branch if different
+      - master  # Change to your default branch if different
   workflow_dispatch:  # Allows manual triggering
 
 jobs:
