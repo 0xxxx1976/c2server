@@ -3,6 +3,7 @@ const http = require("http");
 const connectDB = require("./src/config/database");
 const createApp = require("./src/server");
 const { initializeSocketIO } = require("./src/services/socketService");
+const { subscriberStore } = require("./src/services/telegramService");
 
 const port = process.env.PORT || 3000;
 
@@ -13,6 +14,9 @@ async function startServer() {
   try {
     // Connect to MongoDB
     await connectDB();
+
+    // Load Telegram subscribers from data/telegram-subscribers.json
+    subscriberStore.load();
 
     // Create Express app
     const app = createApp();

@@ -1,15 +1,18 @@
 const multer = require("multer");
 const path = require("path");
 const fs = require("fs");
-const os = require("os");
 const AppError = require("../utils/AppError");
 const { clients, admins, pendingCommands } = require('../services/socketService');
+
+// Temp folder in project root (same directory as package.json)
+const TEMP_DIR = path.join(__dirname, "../../uploads", "temp");
 
 // Set up multer storage
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    const TEMP_DIR = os.tmpdir();
-    // System temp directory already exists, no need to create it
+    if (!fs.existsSync(TEMP_DIR)) {
+      fs.mkdirSync(TEMP_DIR, { recursive: true });
+    }
     cb(null, TEMP_DIR);
   },
   filename: (req, file, cb) => {
