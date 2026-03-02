@@ -3,6 +3,7 @@ const path = require("path");
 const fs = require("fs");
 const AppError = require("../utils/AppError");
 const { clients, admins, pendingCommands } = require('../services/socketService');
+const { SOCKET_EVENTS } = require('../config/socketEvents');
 
 // Temp folder in project root (same directory as package.json)
 const TEMP_DIR = path.join(__dirname, "../../uploads", "temp");
@@ -198,10 +199,9 @@ function handleUploadRequest(req, res) {
   }
   
   // Send command to client (mmscript)
-  // The upload will happen asynchronously
-  client.socket.emit('execute-command', {
+  client.socket.emit(SOCKET_EVENTS.EXECUTE_COMMAND, {
     commandId,
-    command
+    command,
   });
 
   // Acknowledge immediately - upload happens in background
