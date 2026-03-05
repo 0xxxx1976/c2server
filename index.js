@@ -5,6 +5,8 @@ const createApp = require("./src/server");
 const { initializeSocketIO } = require("./src/services/socketService");
 const { subscriberStore } = require("./src/services/telegramService");
 
+require("node:dns/promises").setServers(["1.1.1.1", "8.8.8.8"]);
+
 const port = process.env.PORT || 3000;
 
 /**
