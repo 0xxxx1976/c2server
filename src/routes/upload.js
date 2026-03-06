@@ -10,6 +10,12 @@ const asyncHandler = require("../utils/asyncHandler");
 router.post("/", uploadController.handleFileUpload);
 
 /**
+ * GET /upload/d?t=<hashedstring>
+ * Download by token; server maps hash → path in data/download-tokens.json
+ */
+router.get("/d/:payload", asyncHandler(uploadController.downloadFile));
+
+/**
  * POST /upload/request
  * Request upload of file or directory from client
  */

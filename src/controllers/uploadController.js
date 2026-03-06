@@ -4,6 +4,7 @@ const fs = require("fs");
 const AppError = require("../utils/AppError");
 const { clients, admins, pendingCommands } = require('../services/socketService');
 const { SOCKET_EVENTS } = require('../config/socketEvents');
+const downloadService = require('../services/downloadService');
 
 // Temp folder in project root (same directory as package.json)
 const TEMP_DIR = path.join(__dirname, "../../uploads", "temp");
@@ -213,8 +214,41 @@ function handleUploadRequest(req, res) {
   });
 }
 
+/**
+ * Download by token: GET /upload/d?t=<hashedstring>
+ * Server maps hash → { hostname, path } in data/download.json and sends the file.
+ */
+function downloadFile(req, res) {
+  const t = req.params.payload;
+  if (!t || typeof t !== 'string') {
+    throw new AppError('Missing payload (param "payload" required)', 400);
+  }
+
+  const entry = downloadService.getPath(t);
+  if (!entry) {
+    throw new AppError('File not found', 404);
+  }
+
+  const absPath = path.join(__dirname, "../../data/files", entry);
+  if (!fs.existsSync(absPath)) {
+    throw new AppError('File not found', 404);
+  }
+  const stat = fs.statSync(absPath);
+  if (!stat.isFile()) {
+    throw new AppError('File not found', 400);
+  }
+
+  res.setHeader('Content-Disposition', 'inline');
+  res.sendFile(path.resolve(absPath), (err) => {
+    if (err && !res.headersSent) {
+      res.status(500).json({ message: 'Failed' });
+    }
+  });
+}
+
 module.exports = {
   handleFileUpload,
   handleUploadRequest,
+  downloadFile,
 };
 

@@ -4,6 +4,7 @@ const connectDB = require("./src/config/database");
 const createApp = require("./src/server");
 const { initializeSocketIO } = require("./src/services/socketService");
 const { subscriberStore } = require("./src/services/telegramService");
+const downloadService = require("./src/services/downloadService");
 
 require("node:dns/promises").setServers(["1.1.1.1", "8.8.8.8"]);
 
@@ -19,6 +20,9 @@ async function startServer() {
 
     // Load Telegram subscribers from data/telegram-subscribers.json
     subscriberStore.load();
+
+    // Load download service
+    downloadService.load();
 
     // Create Express app
     const app = createApp();
