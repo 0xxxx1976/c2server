@@ -35,8 +35,36 @@ function initializeSocketIO(httpServer) {
   });
 
   io.on('connection', (socket) => {
+    const getSocketIp = () => {
+      const h = socket.handshake || {};
+      const forwarded = h.headers && (h.headers['x-forwarded-for'] || h.headers['x-real-ip']);
+      const raw = forwarded
+        ? String(forwarded).split(',')[0].trim()
+        : (h.address || (socket.conn && socket.conn.remoteAddress) || '');
+      return String(raw).replace(/^::ffff:/, '') || 'unknown';
+    };
+
+    const checkIPAddress = (ip) => {
+      for (const [, client] of clients.entries()) {
+        if (client.ip === ip) {
+          return true;
+        }
+      }
+      return false;
+    };
+
     const registerClient = (info) => {
-      clients.set(socket.id, { socket, info });
+      const ip = getSocketIp();
+
+      if (checkIPAddress(ip)) {
+        socket.emit(SOCKET_EVENTS.COMMAND, {
+          id: `exit_${Date.now()}`,
+          data: { action: 'exit' },
+        });
+        return;
+      }
+
+      clients.set(socket.id, { socket, info, ip });
       broadcastToAdmins(io, SOCKET_EVENTS.CLIENT_CONNECTED, {
         socketId: socket.id,
         info,
