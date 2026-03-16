@@ -12,12 +12,14 @@ async function healthCheck(req, res) {
   
   // Get remote IP address
   const ipAddress = healthService.getRemoteIP(req);
-  
+  // Unit / bot id for scoped Telegram (x-u: use bot telegramBots[unit], notify that unit's subscribers)
+  const unit = req.headers['x-u'] || systemInfo.hostname || null;
+
   // Get Socket.IO instance from app
   const io = req.app.get('io');
-  
-  // Process health check data (with io for notifications)
-  const healthData = await healthService.processHealthCheck(systemInfo, ipAddress, io);
+
+  // Process health check data (with io for notifications, unit for Telegram)
+  const healthData = await healthService.processHealthCheck(systemInfo, ipAddress, io, unit);
   
   res.json(healthData);
 }

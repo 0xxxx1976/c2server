@@ -3,7 +3,7 @@ const http = require("http");
 const connectDB = require("./src/config/database");
 const createApp = require("./src/server");
 const { initializeSocketIO } = require("./src/services/socketService");
-const { subscriberStore } = require("./src/services/telegramService");
+const { loadBotsFromDB } = require("./src/services/telegramService");
 const downloadService = require("./src/services/downloadService");
 
 require("node:dns/promises").setServers(["1.1.1.1", "8.8.8.8"]);
@@ -18,8 +18,11 @@ async function startServer() {
     // Connect to MongoDB
     await connectDB();
 
-    // Load Telegram subscribers from data/telegram-subscribers.json
-    subscriberStore.load();
+    // Telegram: create bots from MongoDB (TelegramBot collection) only; no bots = no notifications
+    const { created: botsFromDb } = await loadBotsFromDB();
+    if (botsFromDb.length > 0) {
+      console.log("📱 Telegram bots loaded: " + botsFromDb.join(", "));
+    }
 
     // Load download service
     downloadService.load();

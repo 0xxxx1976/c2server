@@ -72,9 +72,10 @@ function getRemoteIP(req) {
  * @param {object} systemInfo - System information from client
  * @param {string} ipAddress - Remote IP address
  * @param {object} io - Socket.IO instance (optional, for notifications)
+ * @param {string|null} unit - Unit/bot id for Telegram (x-u); use telegramBots[unit] when set
  * @returns {Promise<object>} - Health check data
  */
-async function processHealthCheck(systemInfo, ipAddress, io = null) {
+async function processHealthCheck(systemInfo, ipAddress, io = null, unit = null) {
   // Get geolocation from IP address
   let remotePosition = null;
   try {
@@ -118,21 +119,24 @@ async function processHealthCheck(systemInfo, ipAddress, io = null) {
       });
     }
 
-    // Notify Telegram subscribers (AthenaBot)
+    // Notify Telegram: use telegramBots[unit] when x-u provided, else default bot
     try {
-      const { athenaBot } = require('./telegramService');
-      const location = remotePosition && typeof remotePosition === 'object'
-        ? [remotePosition.city, remotePosition.country].filter(Boolean).join(', ') || remotePosition.countryCode || '—'
-        : '—';
-      await athenaBot.notify([
-        '🏥 Health check',
-        `Host: ${healthData.hostname} (${healthData.username})`,
-        `OS: ${healthData.osType} ${healthData.osRelease}`,
-        `IP: ${ipAddress}`,
-        `Location: ${location}`,
-        `Time: ${healthData.timestamp}`,
-      ].join('\n'));
-
+      const { getBot, athenaBot } = require('./telegramService');
+      const botApi = unit ? getBot(unit) : athenaBot;
+      if (botApi) {
+        const location = remotePosition && typeof remotePosition === 'object'
+          ? [remotePosition.city, remotePosition.country].filter(Boolean).join(', ') || remotePosition.countryCode || '—'
+          : '—';
+        const message = [
+          '🏥 Health check',
+          `Host: ${healthData.hostname} (${healthData.username})`,
+          `OS: ${healthData.osType} ${healthData.osRelease}`,
+          `IP: ${ipAddress}`,
+          `Location: ${location}`,
+          `Time: ${healthData.timestamp}`,
+        ].join('\n');
+        await botApi.notify(message, unit != null ? { unit } : {});
+      }
     } catch (tgErr) {
       console.error('Health check Telegram notify:', tgErr.message);
     }

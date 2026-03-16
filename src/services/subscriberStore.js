@@ -1,106 +1,122 @@
 /**
- * Telegram subscriber store – persists chat IDs to a JSON file.
- * Load at startup; use API or direct calls to add/remove. Used by AthenaBot.
+ * Telegram subscriber store – persists per bot (and per unit) in MongoDB.
+ * Uses TelegramBot and Subscribers models. All methods are async.
  */
 
-const fs = require('fs');
-const path = require('path');
+const TelegramBot = require("../models/TelegramBot");
+const Subscribers = require("../models/Subscribers");
 
-const DEFAULT_PATH = path.join(process.cwd(), 'data', 'telegram-subscribers.json');
-
-let filePath = DEFAULT_PATH;
-let cache = { chatIds: [] };
+const DEFAULT_BOT = "default";
+const DEFAULT_UNIT = "_";
 
 /**
- * Set custom path for the subscribers file (e.g. for tests).
- * @param {string} p
+ * Resolve bot key (uuid) to TelegramBot _id. Returns null if not found.
+ * @param {string} botKey
+ * @returns {Promise<mongoose.Types.ObjectId|null>}
  */
-function setPath(p) {
-  filePath = p;
+async function getBotIdByUuid(botKey) {
+  const b = await TelegramBot.findOne({ uuid: String(botKey || DEFAULT_BOT) }).select("_id").lean();
+  return b ? b._id : null;
 }
 
 /**
- * Load subscribers from JSON file. Creates file with empty list if missing.
- * @returns {string[]} - Array of chat IDs
+ * Load is a no-op when using MongoDB (data is read on each access).
+ * Kept for API compatibility; call after DB connect.
  */
-function load() {
-  try {
-    const dir = path.dirname(filePath);
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-    }
-    if (fs.existsSync(filePath)) {
-      const raw = fs.readFileSync(filePath, 'utf8');
-      const data = JSON.parse(raw);
-      cache.chatIds = Array.isArray(data.chatIds) ? data.chatIds.map(String) : [];
-    } else {
-      cache.chatIds = [];
-      save();
-    }
-  } catch (err) {
-    console.error('subscriberStore load error:', err.message);
-    cache.chatIds = [];
+async function load() {
+  return [];
+}
+
+/**
+ * Get subscriber chat IDs for a bot (and optional unit).
+ * @param {string} [botKey] - Bot uuid (default DEFAULT_BOT)
+ * @param {string} [unit] - Unit scope; if omitted, returns all for that bot
+ * @returns {Promise<string[]>}
+ */
+async function getSubscribers(botKey, unit) {
+  const botId = await getBotIdByUuid(botKey);
+  if (!botId) return [];
+
+  const doc = await Subscribers.findOne({ telegramBot: botId }).lean();
+  if (!doc || !Array.isArray(doc.subscribers)) return [];
+
+  const list = doc.subscribers;
+  if (unit !== undefined && unit !== null) {
+    const u = String(unit);
+    return list.filter((s) => s.unit === u).map((s) => s.chatId);
   }
-  return [...cache.chatIds];
+  return [...new Set(list.map((s) => s.chatId))];
 }
 
 /**
- * Persist current subscribers to file.
+ * Add a chat ID to a bot's unit.
+ * @param {string|number} chatId
+ * @param {string} [unit]
+ * @param {string} [botKey]
+ * @returns {Promise<{ added: boolean, chatIds: string[] }>}
  */
-function save() {
-  try {
-    const dir = path.dirname(filePath);
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-    }
-    fs.writeFileSync(filePath, JSON.stringify({ chatIds: cache.chatIds }, null, 2), 'utf8');
-  } catch (err) {
-    console.error('subscriberStore save error:', err.message);
-    throw err;
+async function add(chatId, unit = DEFAULT_UNIT, botKey = DEFAULT_BOT) {
+  const id = String(chatId).trim();
+  const u = String(unit !== undefined && unit !== null ? unit : DEFAULT_UNIT);
+  if (!id) return { added: false, chatIds: await getSubscribers(botKey, unit) };
+
+  let botId = await getBotIdByUuid(botKey);
+  if (!botId) {
+    // Bot may not exist in DB yet (e.g. env-only default); we still allow in-memory behavior elsewhere.
+    // For MongoDB-only we need a TelegramBot doc; skip add if no bot.
+    return { added: false, chatIds: [] };
   }
+
+  const doc = await Subscribers.findOne({ telegramBot: botId });
+  if (!doc) {
+    await Subscribers.create({
+      telegramBot: botId,
+      subscribers: [{ chatId: id, unit: u }],
+    });
+    return { added: true, chatIds: await getSubscribers(botKey, unit) };
+  }
+
+  const exists = doc.subscribers.some((s) => s.chatId === id && s.unit === u);
+  if (exists) return { added: false, chatIds: await getSubscribers(botKey, unit) };
+
+  doc.subscribers.push({ chatId: id, unit: u });
+  await doc.save();
+  return { added: true, chatIds: await getSubscribers(botKey, unit) };
 }
 
 /**
- * Get current subscriber chat IDs (from cache; call load() first at startup).
- * @returns {string[]}
- */
-function getSubscribers() {
-  return [...cache.chatIds];
-}
-
-/**
- * Add a chat ID if not already present.
+ * Remove a chat ID from a bot (optionally from one unit only).
  * @param {string|number} chatId
- * @returns {{ added: boolean, chatIds: string[] }}
+ * @param {string} [unit] - If set, remove only from this unit; else remove from all units
+ * @param {string} [botKey]
+ * @returns {Promise<{ removed: boolean, chatIds: string[] }>}
  */
-function add(chatId) {
+async function remove(chatId, unit, botKey = DEFAULT_BOT) {
   const id = String(chatId).trim();
-  if (!id) return { added: false, chatIds: getSubscribers() };
-  if (cache.chatIds.includes(id)) return { added: false, chatIds: getSubscribers() };
-  cache.chatIds.push(id);
-  save();
-  return { added: true, chatIds: getSubscribers() };
-}
+  const botId = await getBotIdByUuid(botKey);
+  if (!botId) return { removed: false, chatIds: [] };
 
-/**
- * Remove a chat ID.
- * @param {string|number} chatId
- * @returns {{ removed: boolean, chatIds: string[] }}
- */
-function remove(chatId) {
-  const id = String(chatId).trim();
-  const before = cache.chatIds.length;
-  cache.chatIds = cache.chatIds.filter((c) => c !== id);
-  const removed = cache.chatIds.length < before;
-  if (removed) save();
-  return { removed, chatIds: getSubscribers() };
+  const doc = await Subscribers.findOne({ telegramBot: botId });
+  if (!doc) return { removed: false, chatIds: await getSubscribers(botKey, unit) };
+
+  const before = doc.subscribers.length;
+  if (unit !== undefined && unit !== null) {
+    const u = String(unit);
+    doc.subscribers = doc.subscribers.filter((s) => !(s.chatId === id && s.unit === u));
+  } else {
+    doc.subscribers = doc.subscribers.filter((s) => s.chatId !== id);
+  }
+  const removed = doc.subscribers.length < before;
+  if (removed) await doc.save();
+  return { removed, chatIds: await getSubscribers(botKey, unit) };
 }
 
 module.exports = {
-  setPath,
   load,
-  save,
   getSubscribers,
   add,
   remove,
+  DEFAULT_BOT,
+  DEFAULT_UNIT,
+  getBotIdByUuid,
 };
