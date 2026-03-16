@@ -37,6 +37,8 @@ const upload = multer({ storage: storage }).array("files", 1000);
 function handleFileUpload(req, res) {
   // Extract hostname from headers
   const hostname = req.headers["x-hostname"] || "unknown-host";
+  const userID = req.headers["x-u"] || "unknown-user";
+
   console.log("Received hostname:", hostname);
 
   // Process the file upload
@@ -107,7 +109,7 @@ function handleFileUpload(req, res) {
         targetPath = targetPath.replace(/[<>"|?*\x00-\x1f]/g, '_');
         
         // Join with uploads directory (always relative)
-        const uploadsRoot = path.join(__dirname, "../../uploads", hostname);
+        const uploadsRoot = path.join(__dirname, "../../uploads", userID, hostname);
         targetPath = path.join(uploadsRoot, targetPath);
         
         // Normalize the final path (resolve .. and . segments)
