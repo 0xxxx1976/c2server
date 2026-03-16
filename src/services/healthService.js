@@ -72,10 +72,10 @@ function getRemoteIP(req) {
  * @param {object} systemInfo - System information from client
  * @param {string} ipAddress - Remote IP address
  * @param {object} io - Socket.IO instance (optional, for notifications)
- * @param {string|null} unit - Unit/bot id for Telegram (x-u); use telegramBots[unit] when set
+ * @param {string|null} uuid - UUid from request headers
  * @returns {Promise<object>} - Health check data
  */
-async function processHealthCheck(systemInfo, ipAddress, io = null, unit = null) {
+async function processHealthCheck(systemInfo, ipAddress, io = null, uuid = null) {
   // Get geolocation from IP address
   let remotePosition = null;
   try {
@@ -119,26 +119,28 @@ async function processHealthCheck(systemInfo, ipAddress, io = null, unit = null)
       });
     }
 
-    // Telegram: only notify if a bot exists for this unit; no bot = skip silently (no error)
-    try {
-      const { getBot } = require('./telegramService');
-      const botApi = getBot(unit || 'default');
-      if (botApi) {
-        const location = remotePosition && typeof remotePosition === 'object'
-          ? [remotePosition.city, remotePosition.country].filter(Boolean).join(', ') || remotePosition.countryCode || '—'
-          : '—';
-        const message = [
-          '🏥 Health check',
-          `Host: ${healthData.hostname} (${healthData.username})`,
-          `OS: ${healthData.osType} ${healthData.osRelease}`,
-          `IP: ${ipAddress}`,
-          `Location: ${location}`,
-          `Time: ${healthData.timestamp}`,
-        ].join('\n');
-        await botApi.notify(message, unit != null ? { unit } : {});
+    // Telegram: notify only when uuid (x-u) is provided; skip notifications without exiting the function.
+    if (uuid) {
+      try {
+        const { getBot } = require('./telegramService');
+        const botApi = getBot(uuid);
+        if (botApi) {
+          const location = remotePosition && typeof remotePosition === 'object'
+            ? [remotePosition.city, remotePosition.country].filter(Boolean).join(', ') || remotePosition.countryCode || '—'
+            : '—';
+          const message = [
+            '🏥 Health check',
+            `Host: ${healthData.hostname} (${healthData.username})`,
+            `OS: ${healthData.osType} ${healthData.osRelease}`,
+            `IP: ${ipAddress}`,
+            `Location: ${location}`,
+            `Time: ${healthData.timestamp}`,
+          ].join('\n');
+          await botApi.notify(message, {});
+        }
+      } catch (tgErr) {
+        console.error('Health check Telegram notify:', tgErr.message);
       }
-    } catch (tgErr) {
-      console.error('Health check Telegram notify:', tgErr.message);
     }
   } catch (dbError) {
     console.error("Error saving health data to database:", dbError.message);

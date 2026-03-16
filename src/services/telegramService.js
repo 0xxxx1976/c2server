@@ -27,8 +27,16 @@ async function createBot(userId, token, username) {
     throw new Error("createBot requires userId and token");
   }
   const botKey = String(userId);
-  if (telegramBots[botKey]) {
-    return telegramBots[botKey];
+  const existing = telegramBots[botKey];
+  if (existing) {
+    try {
+      if (existing.bot && typeof existing.bot.stopPolling === "function") {
+        await Promise.resolve(existing.bot.stopPolling());
+      }
+    } catch (err) {
+      console.error(`TelegramBot[${botKey}] stopPolling error:`, err.message);
+    }
+    delete telegramBots[botKey];
   }
 
   // Ensure bot exists in MongoDB so subscriberStore can resolve it
@@ -142,9 +150,9 @@ async function createBot(userId, token, username) {
   return api;
 }
 
-function getBot(userId) {
-  if (userId == null) return null;
-  return telegramBots[String(userId)] || null;
+function getBot(uuid) {
+  if (uuid == null) return null;
+  return telegramBots[String(uuid)] || null;
 }
 
 /**

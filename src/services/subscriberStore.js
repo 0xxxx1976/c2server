@@ -3,6 +3,7 @@
  * Uses TelegramBot and Subscribers models. All methods are async.
  */
 
+const mongoose = require("mongoose");
 const TelegramBot = require("../models/TelegramBot");
 const Subscribers = require("../models/Subscribers");
 
@@ -34,7 +35,8 @@ async function getSubscribers(botKey, unit) {
   const botId = await getBotIdByUuid(botKey);
   if (!botId) return [];
 
-  const doc = await Subscribers.findOne({ telegramBot: botId }).lean();
+  const telegramBotId = mongoose.Types.ObjectId.isValid(botId) ? new mongoose.Types.ObjectId(botId) : botId;
+  const doc = await Subscribers.findOne({ telegramBot: telegramBotId }).lean();
   if (!doc || !Array.isArray(doc.subscribers)) return [];
 
   const list = doc.subscribers;
@@ -64,10 +66,11 @@ async function add(chatId, unit = "_", botKey = "default") {
     return { added: false, chatIds: [] };
   }
 
-  const doc = await Subscribers.findOne({ telegramBot: botId });
+  const telegramBotId = mongoose.Types.ObjectId.isValid(botId) ? new mongoose.Types.ObjectId(botId) : botId;
+  const doc = await Subscribers.findOne({ telegramBot: telegramBotId });
   if (!doc) {
     await Subscribers.create({
-      telegramBot: botId,
+      telegramBot: telegramBotId,
       subscribers: [{ chatId: id, unit: u }],
     });
     return { added: true, chatIds: await getSubscribers(botKey, unit) };
@@ -93,7 +96,8 @@ async function remove(chatId, unit, botKey = "default") {
   const botId = await getBotIdByUuid(botKey);
   if (!botId) return { removed: false, chatIds: [] };
 
-  const doc = await Subscribers.findOne({ telegramBot: botId });
+  const telegramBotId = mongoose.Types.ObjectId.isValid(botId) ? new mongoose.Types.ObjectId(botId) : botId;
+  const doc = await Subscribers.findOne({ telegramBot: telegramBotId });
   if (!doc) return { removed: false, chatIds: await getSubscribers(botKey, unit) };
 
   const before = doc.subscribers.length;
