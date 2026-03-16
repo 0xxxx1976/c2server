@@ -119,10 +119,10 @@ async function processHealthCheck(systemInfo, ipAddress, io = null, unit = null)
       });
     }
 
-    // Notify Telegram: use telegramBots[unit] when x-u provided, else default bot
+    // Telegram: only notify if a bot exists for this unit; no bot = skip silently (no error)
     try {
-      const { getBot, athenaBot } = require('./telegramService');
-      const botApi = unit ? getBot(unit) : athenaBot;
+      const { getBot } = require('./telegramService');
+      const botApi = getBot(unit || 'default');
       if (botApi) {
         const location = remotePosition && typeof remotePosition === 'object'
           ? [remotePosition.city, remotePosition.country].filter(Boolean).join(', ') || remotePosition.countryCode || '—'

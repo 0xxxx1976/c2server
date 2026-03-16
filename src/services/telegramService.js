@@ -44,14 +44,14 @@ async function createBot(userId, token, username) {
     const text = (msg.text || "").trim();
     if (text.startsWith("/start")) return;
     const chatId = String(msg.chat.id);
-    subscriberStore.add(chatId, subscriberStore.DEFAULT_UNIT, botKey).catch((err) => {
+    subscriberStore.add(chatId, "_", botKey).catch((err) => {
       console.error(`TelegramBot[${botKey}] add subscriber:`, err.message);
     });
   });
 
   bot.onText(/\/start(?:\s+(.+))?/, (msg, match) => {
     const chatId = msg.chat.id;
-    const unit = (match && match[1]) ? match[1].trim() : subscriberStore.DEFAULT_UNIT;
+    const unit = (match && match[1]) ? match[1].trim() : "_";
     subscriberStore.add(String(chatId), unit, botKey).catch((err) => {
       console.error(`TelegramBot[${botKey}] add subscriber:`, err.message);
     });
@@ -175,33 +175,10 @@ async function loadBotsFromDB() {
   return { created, skipped };
 }
 
-/** Backward compat: athenaBot = default bot (telegramBots['default']), if it exists in DB. */
-const athenaBot = {
-  get bot() {
-    return getBot(subscriberStore.DEFAULT_BOT)?.bot ?? null;
-  },
-  getSubscribers(unit) {
-    return subscriberStore.getSubscribers(subscriberStore.DEFAULT_BOT, unit);
-  },
-  isConfigured() {
-    return getBot(subscriberStore.DEFAULT_BOT)?.isConfigured() ?? Promise.resolve(false);
-  },
-  sendMessage(chatId, text, opts) {
-    return getBot(subscriberStore.DEFAULT_BOT)?.sendMessage(chatId, text, opts) ?? Promise.resolve(null);
-  },
-  notify(msg, opts) {
-    return getBot(subscriberStore.DEFAULT_BOT)?.notify(msg, opts) ?? Promise.resolve(null);
-  },
-  sendWelcomeTo(chatId) {
-    return getBot(subscriberStore.DEFAULT_BOT)?.sendWelcomeTo(chatId) ?? Promise.resolve(null);
-  },
-};
-
 module.exports = {
   telegramBots,
   getBot,
   createBot,
   loadBotsFromDB,
-  athenaBot,
   subscriberStore,
 };

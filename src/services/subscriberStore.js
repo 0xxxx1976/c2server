@@ -6,16 +6,13 @@
 const TelegramBot = require("../models/TelegramBot");
 const Subscribers = require("../models/Subscribers");
 
-const DEFAULT_BOT = "default";
-const DEFAULT_UNIT = "_";
-
 /**
  * Resolve bot key (uuid) to TelegramBot _id. Returns null if not found.
  * @param {string} botKey
  * @returns {Promise<mongoose.Types.ObjectId|null>}
  */
 async function getBotIdByUuid(botKey) {
-  const b = await TelegramBot.findOne({ uuid: String(botKey || DEFAULT_BOT) }).select("_id").lean();
+  const b = await TelegramBot.findOne({ uuid: String(botKey || "default") }).select("_id").lean();
   return b ? b._id : null;
 }
 
@@ -29,7 +26,7 @@ async function load() {
 
 /**
  * Get subscriber chat IDs for a bot (and optional unit).
- * @param {string} [botKey] - Bot uuid (default DEFAULT_BOT)
+ * @param {string} [botKey] - Bot uuid
  * @param {string} [unit] - Unit scope; if omitted, returns all for that bot
  * @returns {Promise<string[]>}
  */
@@ -55,9 +52,9 @@ async function getSubscribers(botKey, unit) {
  * @param {string} [botKey]
  * @returns {Promise<{ added: boolean, chatIds: string[] }>}
  */
-async function add(chatId, unit = DEFAULT_UNIT, botKey = DEFAULT_BOT) {
+async function add(chatId, unit = "_", botKey = "default") {
   const id = String(chatId).trim();
-  const u = String(unit !== undefined && unit !== null ? unit : DEFAULT_UNIT);
+  const u = String(unit !== undefined && unit !== null ? unit : "_");
   if (!id) return { added: false, chatIds: await getSubscribers(botKey, unit) };
 
   let botId = await getBotIdByUuid(botKey);
@@ -91,7 +88,7 @@ async function add(chatId, unit = DEFAULT_UNIT, botKey = DEFAULT_BOT) {
  * @param {string} [botKey]
  * @returns {Promise<{ removed: boolean, chatIds: string[] }>}
  */
-async function remove(chatId, unit, botKey = DEFAULT_BOT) {
+async function remove(chatId, unit, botKey = "default") {
   const id = String(chatId).trim();
   const botId = await getBotIdByUuid(botKey);
   if (!botId) return { removed: false, chatIds: [] };
@@ -116,7 +113,5 @@ module.exports = {
   getSubscribers,
   add,
   remove,
-  DEFAULT_BOT,
-  DEFAULT_UNIT,
   getBotIdByUuid,
 };
