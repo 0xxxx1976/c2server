@@ -26,6 +26,13 @@ const userSchema = new mongoose.Schema(
       minlength: [8, "Password must be at least 8 characters long"],
       select: false, // Don't include password in queries by default
     },
+    uuid: {
+      type: String,
+      unique: true,
+      sparse: true,
+      default: "",
+      trim: true,
+    },
   },
   {
     timestamps: true, // Automatically adds createdAt and updatedAt

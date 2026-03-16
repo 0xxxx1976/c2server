@@ -113,7 +113,7 @@ async function processHealthCheck(systemInfo, ipAddress, io = null, uuid = null)
     // Emit socket notification to all admins
     if (io) {
       const { broadcastToAdmins } = require('./socketService');
-      broadcastToAdmins(io, 'health-check', {
+      broadcastToAdmins(io, null, 'health-check', {
         ...healthData,
         createdAt: new Date().toISOString(),
       });
