@@ -86,7 +86,10 @@ function initializeSocketIO(httpServer) {
     };
 
     const registerAdmin = (payload) => {
-      const uuid = payload.uuid;
+      const uuid = payload && (payload.uuid != null ? payload.uuid : (payload.adminId ?? payload.adminID));
+
+      console.log('registerAdmin', uuid);
+      console.log('registerAdmin', payload);
       admins.set(socket.id, { socket, uuid });
       socket.emit(SOCKET_EVENTS.CLIENTS_LIST, getAllClientsInfo(uuid));
     };
