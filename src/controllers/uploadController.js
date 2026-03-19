@@ -89,7 +89,7 @@ function handleFileUpload(req, res) {
         // Normalize path for cross-platform compatibility
         // Remove Windows drive letters (C:, D:, etc.) - only remove if it's a drive letter pattern
         if (process.platform === 'win32') {
-          targetPath = targetPath.replace(/^[A-Za-z]:/, ''); // Remove drive letter
+          targetPath = targetPath.replace(/^([A-Za-z]):/, '$1'); // Only remove the colon after drive letter
         }
         
         // Remove leading slashes/backslashes to make path relative
