@@ -113,6 +113,7 @@ async function loginUser(credentials) {
       id: user.id,
       email: user.email,
       name: user.name,
+      uuid: user.uuid,
     },
     token: {
       access_token,

@@ -1,123 +1,192 @@
 /**
- * Telegram notification service (AthenaBot) using node-telegram-bot-api.
- * Uses polling to receive /start and messages; subscribers stored in JSON file.
+ * Telegram notification service using node-telegram-bot-api.
+ * Bots are keyed by user id: telegramBots[userId].notify(...). Uses MongoDB (TelegramBot + Subscribers models).
  * @see https://github.com/yagop/node-telegram-bot-api
  */
 
-const TelegramBot = require('node-telegram-bot-api');
-const subscriberStore = require('./subscriberStore');
+const TelegramBotApi = require("node-telegram-bot-api");
+const subscriberStore = require("./subscriberStore");
+const TelegramBotModel = require("../models/TelegramBot");
 
-/** Default message sent when a user subscribes via /start */
 const DEFAULT_WELCOME_MESSAGE =
-  '✅ You are now subscribed to AthenaBot notifications.\n\n' +
-  'You will receive health check alerts and other updates from the server.';
+  "✅ You are now subscribed to notifications.\n\n" +
+  "You will receive health check alerts and other updates. Use /start <unit> to subscribe to a specific unit.";
 
-const token = process.env.TELEGRAM_BOT_TOKEN || process.env.ATHENABOT_TOKEN;
-let bot = null;
+/** Registry: userId -> bot API object */
+const telegramBots = Object.create(null);
 
-if (token) {
-  bot = new TelegramBot(token, { polling: true });
+/**
+ * Create a bot instance and register it under userId. Upserts TelegramBot in MongoDB so subscribers can be stored.
+ * @param {string} userId - Bot id (uuid)
+ * @param {string} token - Telegram bot token
+ * @param {string} [username] - Display name (defaults to userId)
+ * @returns {Promise<object>} Bot API
+ */
+async function createBot(userId, token, username) {
+  if (!userId || !token) {
+    throw new Error("createBot requires userId and token");
+  }
+  const botKey = String(userId);
+  const existing = telegramBots[botKey];
+  if (existing) {
+    try {
+      if (existing.bot && typeof existing.bot.stopPolling === "function") {
+        await Promise.resolve(existing.bot.stopPolling());
+      }
+    } catch (err) {
+      console.error(`TelegramBot[${botKey}] stopPolling error:`, err.message);
+    }
+    delete telegramBots[botKey];
+  }
 
-  // Any message → register chat as subscriber
-  bot.on('message', (msg) => {
+  // Ensure bot exists in MongoDB so subscriberStore can resolve it
+  await TelegramBotModel.findOneAndUpdate(
+    { uuid: botKey },
+    { $set: { username: username || botKey, uuid: botKey, token } },
+    { upsert: true, new: true }
+  );
+
+  const bot = new TelegramBotApi(token, { polling: true });
+
+  bot.on("message", (msg) => {
+    const text = (msg.text || "").trim();
+    if (text.startsWith("/start")) return;
     const chatId = String(msg.chat.id);
-    subscriberStore.add(chatId);
-  });
-
-  // /start → send welcome (already added in 'message')
-  bot.onText(/\/start/, (msg) => {
-    const chatId = msg.chat.id;
-    bot.sendMessage(chatId, DEFAULT_WELCOME_MESSAGE).catch((err) => {
-      console.error('AthenaBot welcome error:', err.message);
+    subscriberStore.add(chatId, "_", botKey).catch((err) => {
+      console.error(`TelegramBot[${botKey}] add subscriber:`, err.message);
     });
   });
 
-  // Bot removed from chat → remove from subscribers
-  bot.on('my_chat_member', (update) => {
+  bot.onText(/\/start(?:\s+(.+))?/, (msg, match) => {
+    const chatId = msg.chat.id;
+    const unit = (match && match[1]) ? match[1].trim() : "_";
+    subscriberStore.add(String(chatId), unit, botKey).catch((err) => {
+      console.error(`TelegramBot[${botKey}] add subscriber:`, err.message);
+    });
+    bot.sendMessage(chatId, DEFAULT_WELCOME_MESSAGE).catch((err) => {
+      console.error(`TelegramBot[${botKey}] welcome error:`, err.message);
+    });
+  });
+
+  bot.on("my_chat_member", (update) => {
     const status = update.new_chat_member?.status;
-    if (status === 'left' || status === 'kicked') {
-      subscriberStore.remove(String(update.chat.id));
+    if (status === "left" || status === "kicked") {
+      subscriberStore.remove(String(update.chat.id), undefined, botKey).catch((err) => {
+        console.error(`TelegramBot[${botKey}] remove subscriber:`, err.message);
+      });
     }
   });
 
-  bot.on('polling_error', (err) => {
-    console.error('AthenaBot polling_error:', err.message);
+  bot.on("polling_error", (err) => {
+    console.error(`TelegramBot[${botKey}] polling_error:`, err.message);
   });
-}
 
-/**
- * Get current subscriber chat IDs from store.
- */
-function getSubscribers() {
-  return subscriberStore.getSubscribers();
-}
-
-function isConfigured() {
-  return Boolean(bot && getSubscribers().length > 0);
-}
-
-/**
- * Send a message to one chat (uses bot.sendMessage).
- */
-async function sendMessage(chatId, text, options = {}) {
-  if (!bot) return null;
-  return bot.sendMessage(chatId, text, {
-    disable_notification: options.disableNotification,
-    parse_mode: options.parseMode,
-  });
-}
-
-/**
- * Notify all subscribers. No-op if bot not configured.
- */
-async function notify(message, options = {}) {
-  if (!bot) {
-    console.warn('AthenaBot: Skipping notification (bot not configured)');
-    return null;
+  function getSubscribers(unit) {
+    return subscriberStore.getSubscribers(botKey, unit);
   }
-  const chatIds = options.chatId != null ? [String(options.chatId)] : getSubscribers();
-  if (chatIds.length === 0) {
-    console.warn('AthenaBot: No subscribers to notify');
-    return null;
+
+  async function isConfigured() {
+    const subs = await getSubscribers();
+    return Boolean(bot && subs.length > 0);
   }
-  const results = [];
-  for (const chatId of chatIds) {
+
+  async function sendMessage(chatId, text, options = {}) {
+    if (!bot) return null;
+    return bot.sendMessage(chatId, text, {
+      disable_notification: options.disableNotification,
+      parse_mode: options.parseMode,
+    });
+  }
+
+  async function notify(message, options = {}) {
+    if (!bot) {
+      console.warn(`TelegramBot[${botKey}]: Skipping (bot not configured)`);
+      return null;
+    }
+    const chatIds =
+      options.chatId != null ? [String(options.chatId)] : await getSubscribers(options.unit);
+    if (chatIds.length === 0) {
+      console.warn(
+        `TelegramBot[${botKey}]: No subscribers to notify` +
+          (options.unit != null ? ` for unit "${options.unit}"` : "")
+      );
+      return null;
+    }
+    const results = [];
+    for (const chatId of chatIds) {
+      try {
+        const sent = await sendMessage(chatId, message, options);
+        results.push(sent);
+      } catch (err) {
+        console.error(`TelegramBot[${botKey}]: Failed to notify ${chatId}:`, err.message);
+        results.push(null);
+      }
+    }
+    return results;
+  }
+
+  async function sendWelcomeTo(chatId) {
+    if (!bot) return null;
     try {
-      const sent = await sendMessage(chatId, message, options);
-      results.push(sent);
+      return await sendMessage(chatId, DEFAULT_WELCOME_MESSAGE);
     } catch (err) {
-      console.error(`AthenaBot: Failed to notify ${chatId}:`, err.message);
-      results.push(null);
+      console.error(`TelegramBot[${botKey}] sendWelcomeTo error:`, err.message);
+      return null;
     }
   }
-  return results;
+
+  const api = {
+    get bot() {
+      return bot;
+    },
+    getSubscribers,
+    isConfigured,
+    sendMessage,
+    notify,
+    sendWelcomeTo,
+  };
+
+  telegramBots[botKey] = api;
+  return api;
+}
+
+function getBot(uuid) {
+  if (uuid == null) return null;
+  return telegramBots[String(uuid)] || null;
 }
 
 /**
- * Send welcome message to a chat (e.g. when they subscribe).
+ * Load bots from MongoDB (TelegramBot collection). Use after DB connect.
+ * @returns {Promise<{ created: string[], skipped: number }>}
  */
-async function sendWelcomeTo(chatId) {
-  if (!bot) return null;
+async function loadBotsFromDB() {
+  const created = [];
+  let skipped = 0;
   try {
-    return await sendMessage(chatId, DEFAULT_WELCOME_MESSAGE);
+    const docs = await TelegramBotModel.find().select("+token").lean();
+    for (const doc of docs) {
+      if (!doc.uuid || !doc.token) {
+        skipped += 1;
+        continue;
+      }
+      try {
+        await createBot(doc.uuid, doc.token, doc.username);
+        created.push(doc.username ? `${doc.username} (${doc.uuid})` : doc.uuid);
+      } catch (err) {
+        console.error(`Telegram: Failed to create bot ${doc.uuid}:`, err.message);
+        skipped += 1;
+      }
+    }
   } catch (err) {
-    console.error('AthenaBot sendWelcomeTo error:', err.message);
-    return null;
+    console.error("Telegram loadBotsFromDB error:", err.message);
   }
+  return { created, skipped };
 }
-
-const athenaBot = {
-  get bot() {
-    return bot;
-  },
-  getSubscribers,
-  isConfigured,
-  sendMessage,
-  notify,
-  sendWelcomeTo,
-};
 
 module.exports = {
-  athenaBot,
+  telegramBots,
+  getBot,
+  createBot,
+  loadBotsFromDB,
   subscriberStore,
 };

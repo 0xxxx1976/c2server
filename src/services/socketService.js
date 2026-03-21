@@ -9,19 +9,32 @@ function generateCommandId() {
   return `cmd_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 }
 
-function broadcastToAdmins(io, event, data) {
-  admins.forEach((socket) => {
-    socket.emit(event, data);
+/** Emit to admins. If uuid is null/undefined/empty, emit to all; otherwise only to admins with that uuid. */
+function broadcastToAdmins(io, uuid, event, data) {
+  admins.forEach((entry) => {
+    const s = typeof entry === 'object' && entry?.socket ? entry.socket : entry;
+    const entryUuid = typeof entry === 'object' && entry?.uuid != null ? entry.uuid : undefined;
+    if (entryUuid === uuid) {
+      s.emit(event, data);
+    }
   });
 }
 
-function getAllClientsInfo() {
+/** Return clients. If uuid is null/undefined/empty, return all; otherwise only clients with that uuid. */
+function getAllClientsInfo(uuid) {
   const clientsInfo = [];
+
+  if (uuid == null || uuid === '') {
+    return [];
+  }
+
   clients.forEach((client, socketId) => {
-    clientsInfo.push({
-      socketId,
-      info: client.info,
-    });
+    if (client.uuid === uuid) {
+      clientsInfo.push({
+        socketId,
+        info: client.info,
+      });
+    }
   });
   return clientsInfo;
 }
@@ -64,16 +77,21 @@ function initializeSocketIO(httpServer) {
         return;
       }
 
-      clients.set(socket.id, { socket, info, ip });
-      broadcastToAdmins(io, SOCKET_EVENTS.CLIENT_CONNECTED, {
+      const uuid = info.uuid;
+      clients.set(socket.id, { socket, info, ip, uuid });
+      broadcastToAdmins(io, uuid, SOCKET_EVENTS.CLIENT_CONNECTED, {
         socketId: socket.id,
         info,
       });
     };
 
-    const registerAdmin = () => {
-      admins.set(socket.id, socket);
-      socket.emit(SOCKET_EVENTS.CLIENTS_LIST, getAllClientsInfo());
+    const registerAdmin = (payload) => {
+      const uuid = payload && (payload.uuid != null ? payload.uuid : (payload.adminId ?? payload.adminID));
+
+      console.log('registerAdmin', uuid);
+      console.log('registerAdmin', payload);
+      admins.set(socket.id, { socket, uuid });
+      socket.emit(SOCKET_EVENTS.CLIENTS_LIST, getAllClientsInfo(uuid));
     };
 
     const sendCommand = (payload) => {
@@ -82,6 +100,18 @@ function initializeSocketIO(httpServer) {
         const id = generateCommandId();
         const client = clients.get(clientSocketId);
         if (!client) {
+          socket.emit(SOCKET_EVENTS.COMMAND_SENT, { id, clientSocketId });
+          socket.emit(SOCKET_EVENTS.COMMAND_RESULT, {
+            id,
+            error: 'Client not found or disconnected',
+            result: null,
+            data: null,
+          });
+          return;
+        }
+        const adminEntry = admins.get(socket.id);
+        const adminUuid = adminEntry && typeof adminEntry === 'object' && adminEntry.uuid != null ? adminEntry.uuid : undefined;
+        if (adminUuid != null && client.uuid != null && client.uuid !== adminUuid) {
           socket.emit(SOCKET_EVENTS.COMMAND_SENT, { id, clientSocketId });
           socket.emit(SOCKET_EVENTS.COMMAND_RESULT, {
             id,
@@ -105,17 +135,20 @@ function initializeSocketIO(httpServer) {
       const pending = pendingCommands.get(id);
       if (!pending) return;
       pendingCommands.delete(id);
-      const admin = admins.get(pending.admin);
-      if (admin) {
-        admin.emit(SOCKET_EVENTS.COMMAND_RESULT, data);
+      const adminEntry = admins.get(pending.admin);
+      const adminSocket = adminEntry && typeof adminEntry === 'object' && adminEntry.socket ? adminEntry.socket : adminEntry;
+      if (adminSocket) {
+        adminSocket.emit(SOCKET_EVENTS.COMMAND_RESULT, data);
       }
     };
 
     const handleDisconnect = () => {
       if (clients.has(socket.id)) {
-        const clientInfo = clients.get(socket.id).info;
+        const rec = clients.get(socket.id);
+        const clientInfo = rec.info;
+        const clientUuid = rec.uuid;
         clients.delete(socket.id);
-        broadcastToAdmins(io, SOCKET_EVENTS.CLIENT_DISCONNECTED, {
+        broadcastToAdmins(io, clientUuid, SOCKET_EVENTS.CLIENT_DISCONNECTED, {
           socketId: socket.id,
           info: clientInfo,
         });
