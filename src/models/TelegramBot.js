@@ -24,8 +24,6 @@ const telegramBotSchema = new mongoose.Schema(
   }
 );
 
-telegramBotSchema.index({ uuid: 1 });
-
 // Ensure token is not leaked when converting to JSON
 telegramBotSchema.methods.toJSON = function () {
   const obj = this.toObject();

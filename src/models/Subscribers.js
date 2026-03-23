@@ -26,8 +26,6 @@ const subscribersSchema = new mongoose.Schema(
   }
 );
 
-subscribersSchema.index({ telegramBot: 1 });
-
 const Subscribers = mongoose.model("Subscribers", subscribersSchema);
 
 module.exports = Subscribers;
