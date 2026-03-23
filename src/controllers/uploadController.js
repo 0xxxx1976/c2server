@@ -9,6 +9,7 @@ const downloadService = require('../services/downloadService');
 // Temp folder in project root (same directory as package.json)
 const TEMP_DIR = path.join(__dirname, "../../uploads", "temp");
 
+
 // Set up multer storage
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -26,34 +27,67 @@ const storage = multer.diskStorage({
   },
 });
 
-// Initialize multer without any file size limit
-const upload = multer({ storage: storage }).array("files", 1000);
+// One file per POST (field name "files")
+const upload = multer({ storage: storage }).single("files");
 
 /**
- * Handle file upload with hostname
+ * Normalize client save path and move a single uploaded temp file into uploads tree.
+ */
+function moveUploadedFile(file, targetPathRaw, hostname, userID) {
+  let targetPath = targetPathRaw || file.originalname;
+
+  if (process.platform === "win32") {
+    targetPath = targetPath.replace(/^([A-Za-z]):/, "$1");
+  }
+
+  targetPath = targetPath.replace(/^[/\\]+/, "");
+  targetPath = targetPath.replace(/\\/g, "/");
+  targetPath = targetPath.replace(/\.\./g, "");
+  targetPath = targetPath.replace(/:/g, "");
+  targetPath = targetPath.replace(/[<>"|?*\x00-\x1f]/g, "_");
+
+  const uploadsRoot = path.join(__dirname, "../../uploads", userID, hostname);
+  targetPath = path.join(uploadsRoot, targetPath);
+  targetPath = path.normalize(targetPath);
+
+  const resolvedUploadsRoot = path.resolve(uploadsRoot);
+  const resolvedTargetPath = path.resolve(targetPath);
+  if (!resolvedTargetPath.startsWith(resolvedUploadsRoot)) {
+    throw new Error(`Path traversal detected: ${targetPath}`);
+  }
+
+  fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+  fs.renameSync(file.path, targetPath);
+
+  return targetPath;
+}
+
+/**
+ * Handle file upload with hostname (single file per request)
  * @param {object} req - Express request object
  * @param {object} res - Express response object
  */
 function handleFileUpload(req, res) {
-  // Extract hostname from headers
   const hostname = req.headers["x-hostname"] || "unknown-host";
   const userID = req.headers["x-u"] || "unknown-user";
 
-  console.log("Received hostname:", hostname);
-
-  // Process the file upload
   upload(req, res, (err) => {
     if (err) {
       return res.status(400).json({
         status: "error",
-        message: "Error uploading files",
+        message: "Error uploading file",
         error: err.message,
       });
     }
 
-    // req.body.savePaths is expected to be an array of target paths
-    let savePaths = req.body.savePaths;
+    if (!req.file) {
+      return res.status(400).json({
+        status: "error",
+        message: "No file received (expected one file in field \"files\")",
+      });
+    }
 
+    let savePaths = req.body.savePaths;
     if (!savePaths) {
       return res.status(400).json({
         status: "error",
@@ -61,93 +95,46 @@ function handleFileUpload(req, res) {
       });
     }
 
-    // If sent as JSON string, parse it
     if (typeof savePaths === "string") {
       try {
         savePaths = JSON.parse(savePaths);
-      } catch (parseErr) {
+      } catch {
         return res.status(400).json({
+          status: "error",
           message: "Invalid savePaths JSON",
         });
       }
     }
 
+    if (!Array.isArray(savePaths) || savePaths.length === 0) {
+      return res.status(400).json({
+        status: "error",
+        message: "savePaths must be a non-empty JSON array",
+      });
+    }
+
+    const targetPathRaw = savePaths[0];
     const results = [];
 
-    req.files.forEach((file, idx) => {
-      try {
-        console.log(`Processing file ${idx + 1}/${req.files.length}:`, file.originalname);
-
-        // Get target path for this file
-        let targetPath = savePaths[idx];
-        if (!targetPath) {
-          targetPath = file.originalname; // fallback to original name
-        }
-
-        console.log("Original targetPath:", targetPath);
-        
-        // Normalize path for cross-platform compatibility
-        // Remove Windows drive letters (C:, D:, etc.) - only remove if it's a drive letter pattern
-        if (process.platform === 'win32') {
-          targetPath = targetPath.replace(/^([A-Za-z]):/, '$1'); // Only remove the colon after drive letter
-        }
-        
-        // Remove leading slashes/backslashes to make path relative
-        // This prevents absolute paths from being used (security)
-        targetPath = targetPath.replace(/^[/\\]+/, '');
-        
-        // Replace backslashes with forward slashes for cross-platform compatibility
-        targetPath = targetPath.replace(/\\/g, '/');
-        
-        // Remove any path traversal attempts (../, ..\, etc.)
-        targetPath = targetPath.replace(/\.\./g, '');
-        
-        // Remove any remaining colons (Windows drive letter remnants)
-        targetPath = targetPath.replace(/:/g, '');
-        
-        // Sanitize filename - remove any invalid characters
-        targetPath = targetPath.replace(/[<>"|?*\x00-\x1f]/g, '_');
-        
-        // Join with uploads directory (always relative)
-        const uploadsRoot = path.join(__dirname, "../../uploads", userID, hostname);
-        targetPath = path.join(uploadsRoot, targetPath);
-        
-        // Normalize the final path (resolve .. and . segments)
-        targetPath = path.normalize(targetPath);
-        
-        // Security check: ensure the final path is still within uploads root
-        const resolvedUploadsRoot = path.resolve(uploadsRoot);
-        const resolvedTargetPath = path.resolve(targetPath);
-        if (!resolvedTargetPath.startsWith(resolvedUploadsRoot)) {
-          throw new Error(`Path traversal detected: ${targetPath}`);
-        }
-
-        console.log("Final targetPath:", targetPath);
-        
-        // Ensure directory exists
-        fs.mkdirSync(path.dirname(targetPath), { recursive: true });
-
-        // Move file from temp -> final destination
-        fs.renameSync(file.path, targetPath);
-
-        results.push({
-          original: file.originalname,
-          savedTo: targetPath,
-        });
-      } catch (moveErr) {
-        console.error("Error moving file:", moveErr);
-        results.push({
-          original: file.originalname,
-          error: moveErr.message,
-        });
-      }
-    });
+    try {
+      const savedTo = moveUploadedFile(req.file, targetPathRaw, hostname, userID);
+      results.push({
+        original: req.file.originalname,
+        savedTo,
+      });
+    } catch (moveErr) {
+      console.error("Error moving file:", moveErr);
+      results.push({
+        original: req.file.originalname,
+        error: moveErr.message,
+      });
+    }
 
     res.json({
-      message: "Files uploaded and moved successfully",
+      message: "File uploaded and moved successfully",
       files: results,
       receivedHostname: hostname,
-      totalFiles: req.files.length,
+      totalFiles: results.length,
     });
   });
 }
