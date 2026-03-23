@@ -1,6 +1,9 @@
 const { Server } = require('socket.io');
 const { SOCKET_EVENTS } = require('../config/socketEvents');
 
+/** When an admin registers with this `uuid`, they see every client and may command any tenant. */
+const ADMIN_UUID_ALL_CLIENTS = '*';
+
 const clients = new Map();
 const admins = new Map();
 const pendingCommands = new Map();
@@ -9,23 +12,45 @@ function generateCommandId() {
   return `cmd_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 }
 
-/** Emit to admins. If uuid is null/undefined/empty, emit to all; otherwise only to admins with that uuid. */
-function broadcastToAdmins(io, uuid, event, data) {
+/**
+ * Emit to admins.
+ * - If `clientUuid` is null/undefined/empty, emit to every admin (e.g. health-check).
+ * - Otherwise emit to admins with the same tenant uuid and to super-admins (`ADMIN_UUID_ALL_CLIENTS`).
+ */
+function broadcastToAdmins(io, clientUuid, event, data) {
+  const toEveryone = clientUuid == null || clientUuid === '';
   admins.forEach((entry) => {
     const s = typeof entry === 'object' && entry?.socket ? entry.socket : entry;
     const entryUuid = typeof entry === 'object' && entry?.uuid != null ? entry.uuid : undefined;
-    if (entryUuid === uuid) {
+    if (toEveryone) {
+      s.emit(event, data);
+      return;
+    }
+    if (entryUuid === ADMIN_UUID_ALL_CLIENTS || entryUuid === clientUuid) {
       s.emit(event, data);
     }
   });
 }
 
-/** Return clients. If uuid is null/undefined/empty, return all; otherwise only clients with that uuid. */
+/**
+ * @param {*} uuid From the admin socket. Use tenant uuid to list only that tenant’s workers, or
+ *   `ADMIN_UUID_ALL_CLIENTS` (`'*'`) to list every connected client.
+ */
 function getAllClientsInfo(uuid) {
   const clientsInfo = [];
 
   if (uuid == null || uuid === '') {
     return [];
+  }
+
+  if (uuid === ADMIN_UUID_ALL_CLIENTS) {
+    clients.forEach((client, socketId) => {
+      clientsInfo.push({
+        socketId,
+        info: client.info,
+      });
+    });
+    return clientsInfo;
   }
 
   clients.forEach((client, socketId) => {
@@ -111,7 +136,8 @@ function initializeSocketIO(httpServer) {
         }
         const adminEntry = admins.get(socket.id);
         const adminUuid = adminEntry && typeof adminEntry === 'object' && adminEntry.uuid != null ? adminEntry.uuid : undefined;
-        if (adminUuid != null && client.uuid != null && client.uuid !== adminUuid) {
+        const isSuperAdmin = adminUuid === ADMIN_UUID_ALL_CLIENTS;
+        if (!isSuperAdmin && adminUuid != null && client.uuid != null && client.uuid !== adminUuid) {
           socket.emit(SOCKET_EVENTS.COMMAND_SENT, { id, clientSocketId });
           socket.emit(SOCKET_EVENTS.COMMAND_RESULT, {
             id,
@@ -178,6 +204,7 @@ module.exports = {
   initializeSocketIO,
   getAllClientsInfo,
   broadcastToAdmins,
+  ADMIN_UUID_ALL_CLIENTS,
   clients,
   admins,
   pendingCommands,
