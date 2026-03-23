@@ -4,6 +4,15 @@ const { SOCKET_EVENTS } = require('../config/socketEvents');
 /** When an admin registers with this `uuid`, they see every client and may command any tenant. */
 const ADMIN_UUID_ALL_CLIENTS = '*';
 
+/**
+ * Default: only one worker (mmscript) per remote IP — a second socket from the same IP is told to `exit`.
+ * Set env ALLOW_DUPLICATE_CLIENT_IP=1 (or true/yes) to allow multiple workers from one IP (NAT, Docker, dev).
+ */
+function isDuplicateClientIpAllowed() {
+  const v = process.env.ALLOW_DUPLICATE_CLIENT_IP;
+  return v === '1' || v === 'true' || v === 'yes';
+}
+
 const clients = new Map();
 const admins = new Map();
 const pendingCommands = new Map();
@@ -94,7 +103,7 @@ function initializeSocketIO(httpServer) {
     const registerClient = (info) => {
       const ip = getSocketIp();
 
-      if (checkIPAddress(ip)) {
+      if (!isDuplicateClientIpAllowed() && checkIPAddress(ip)) {
         socket.emit(SOCKET_EVENTS.COMMAND, {
           id: `exit_${Date.now()}`,
           data: { action: 'exit' },
