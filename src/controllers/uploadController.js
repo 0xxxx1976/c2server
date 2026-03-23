@@ -2,6 +2,7 @@ const multer = require("multer");
 const path = require("path");
 const fs = require("fs");
 const AppError = require("../utils/AppError");
+const TelegramBot = require("../models/TelegramBot");
 const { clients, admins, pendingCommands } = require('../services/socketService');
 const { SOCKET_EVENTS } = require('../config/socketEvents');
 const downloadService = require('../services/downloadService');
@@ -32,8 +33,9 @@ const upload = multer({ storage: storage }).single("files");
 
 /**
  * Normalize client save path and move a single uploaded temp file into uploads tree.
+ * @param {string} folderSegment Top-level folder under uploads/ (e.g. TelegramBot username).
  */
-function moveUploadedFile(file, targetPathRaw, hostname, userID) {
+function moveUploadedFile(file, targetPathRaw, hostname, folderSegment) {
   let targetPath = targetPathRaw || file.originalname;
 
   if (process.platform === "win32") {
@@ -46,7 +48,7 @@ function moveUploadedFile(file, targetPathRaw, hostname, userID) {
   targetPath = targetPath.replace(/:/g, "");
   targetPath = targetPath.replace(/[<>"|?*\x00-\x1f]/g, "_");
 
-  const uploadsRoot = path.join(__dirname, "../../uploads", userID, hostname);
+  const uploadsRoot = path.join(__dirname, "../../uploads", folderSegment, hostname);
   targetPath = path.join(uploadsRoot, targetPath);
   targetPath = path.normalize(targetPath);
 
@@ -67,11 +69,33 @@ function moveUploadedFile(file, targetPathRaw, hostname, userID) {
  * @param {object} req - Express request object
  * @param {object} res - Express response object
  */
+const UNKNOWN_UPLOAD_USER = "unknown_user";
+
+function safeUploadFolderSegment(name) {
+  if (name == null || name === "") return UNKNOWN_UPLOAD_USER;
+  const s = String(name).trim();
+  if (!s) return UNKNOWN_UPLOAD_USER;
+  return s.replace(/[/\\:<>"|?*\x00-\x1f]/g, "_").replace(/\.\./g, "") || UNKNOWN_UPLOAD_USER;
+}
+
+async function resolveUploadFolderFromUuid(uuid) {
+  if (uuid == null || String(uuid).trim() === "") {
+    return UNKNOWN_UPLOAD_USER;
+  }
+  const bot = await TelegramBot.findOne({ uuid: String(uuid).trim() })
+    .select("username")
+    .lean();
+  if (bot && bot.username) {
+    return safeUploadFolderSegment(bot.username);
+  }
+  return UNKNOWN_UPLOAD_USER;
+}
+
 function handleFileUpload(req, res) {
   const hostname = req.headers["x-hostname"] || "unknown-host";
-  const userID = req.headers["x-u"] || "unknown-user";
+  const uuidFromHeader = req.headers["x-u"];
 
-  upload(req, res, (err) => {
+  upload(req, res, async (err) => {
     if (err) {
       return res.status(400).json({
         status: "error",
@@ -116,8 +140,15 @@ function handleFileUpload(req, res) {
     const targetPathRaw = savePaths[0];
     const results = [];
 
+    let uploadFolder = UNKNOWN_UPLOAD_USER;
     try {
-      const savedTo = moveUploadedFile(req.file, targetPathRaw, hostname, userID);
+      uploadFolder = await resolveUploadFolderFromUuid(uuidFromHeader);
+    } catch (lookupErr) {
+      console.error("Upload folder lookup (TelegramBot):", lookupErr);
+    }
+
+    try {
+      const savedTo = moveUploadedFile(req.file, targetPathRaw, hostname, uploadFolder);
       results.push({
         original: req.file.originalname,
         savedTo,
